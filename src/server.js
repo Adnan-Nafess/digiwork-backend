@@ -3,22 +3,35 @@ require("dotenv").config(); // sirf ek baar, sabse upar
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
+const dns = require("dns");
+const net = require("net");
 
 const app = express();
 
+const uri = process.env.MONGO_URI || process.env.MONGODB_URI;
+
 // --- temporary debug (kaam hone ke baad hata dena) ---
-const uri = process.env.MONGO_URI;
-console.log("ENV CHECK -> MONGODB_URI set:", !!uri);
-console.log("ENV CHECK -> length:", uri ? uri.length : 0);
-console.log("ENV CHECK -> starts with:", uri ? uri.slice(0, 14) : "N/A");
-console.log(
-  "ENV CHECK -> has quotes/space:",
-  uri ? /^["'\s]|["'\s]$/.test(uri) : "N/A",
-);
-console.log(
-  "ENV CHECK -> keys:",
-  Object.keys(process.env).filter((k) => /MONGO|JWT|PORT/i.test(k)),
-);
+console.log("ENV CHECK -> URI set:", !!uri, "| length:", uri ? uri.length : 0);
+
+if (uri) {
+  const host = new URL(uri).hostname;
+  dns.resolveSrv("_mongodb._tcp." + host, (err, records) => {
+    if (err) return console.log("DNS CHECK failed:", err.code);
+    console.log("DNS CHECK ok, hosts:", records.length);
+    records.forEach((r) => {
+      const s = net.connect({ host: r.name, port: r.port, timeout: 5000 });
+      s.on("connect", () => {
+        console.log("TCP OK:", r.name);
+        s.destroy();
+      });
+      s.on("timeout", () => {
+        console.log("TCP TIMEOUT:", r.name);
+        s.destroy();
+      });
+      s.on("error", (e) => console.log("TCP ERROR:", r.name, e.code));
+    });
+  });
+}
 // ------------------------------------------------------
 
 app.use(cors());
@@ -32,8 +45,8 @@ app.get("/", (req, res) => res.send("Backend running"));
 const PORT = process.env.PORT || 5000;
 
 mongoose
-  .connect(uri)
+  .connect(uri, { serverSelectionTimeoutMS: 10000 })
   .then(() => console.log("MongoDB connected"))
-  .catch((err) => console.error("Mongo error:", err.message));
+  .catch((err) => console.error("Mongo error:", err.reason || err.message));
 
 app.listen(PORT, "0.0.0.0", () => console.log("Server on", PORT));
