@@ -7,7 +7,7 @@ const cors = require("cors");
 const app = express();
 
 // --- temporary debug (kaam hone ke baad hata dena) ---
-const uri = process.env.MONGODB_URI;
+const uri = process.env.MONGO_URI;
 console.log("ENV CHECK -> MONGODB_URI set:", !!uri);
 console.log("ENV CHECK -> length:", uri ? uri.length : 0);
 console.log("ENV CHECK -> starts with:", uri ? uri.slice(0, 14) : "N/A");
