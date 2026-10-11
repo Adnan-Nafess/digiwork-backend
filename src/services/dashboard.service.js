@@ -1,18 +1,20 @@
-const Category = require("../models/Category");
-const Subcategory = require("../models/Subcategory");
-const Article = require("../models/Article");
+const prisma = require("../config/prisma");
 
 const getDashboardStats = async () => {
   const [categories, subcategories, articles] = await Promise.all([
-    Category.countDocuments({
-      isActive: true,
+    prisma.category.count({
+      where: {
+        isActive: true,
+      },
     }),
 
-    Subcategory.countDocuments({
-      isActive: true,
+    prisma.subcategory.count({
+      where: {
+        isActive: true,
+      },
     }),
 
-    Article.countDocuments({}),
+    prisma.article.count(),
   ]);
 
   return {

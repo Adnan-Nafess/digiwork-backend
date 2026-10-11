@@ -1,9 +1,11 @@
-const mongoose = require("mongoose");
-
-const Category = require("../models/Category");
+const crypto = require("crypto");
+const prisma = require("../config/prisma");
 const ApiError = require("../utils/ApiError");
 const generateSlug = require("../utils/generateSlug");
 const { syncContentMedia } = require("./media.service");
+
+const isValidId = (id) =>
+  typeof id === "string" && /^[a-f0-9]{24}$/i.test(id);
 
 /*
 |--------------------------------------------------------------------------
@@ -23,52 +25,35 @@ const createCategory = async ({
   const trimmedName = name.trim();
   const slug = generateSlug(trimmedName);
 
-  const existingCategory = await Category.findOne({
-    $or: [{ name: trimmedName }, { slug }],
+  const existingCategory = await prisma.category.findFirst({
+    where: {
+      OR: [{ name: trimmedName }, { slug }],
+    },
   });
 
   if (existingCategory) {
     throw new ApiError(409, "Category already exists");
   }
 
-  const finalStatus = status || "draft";
-
-  const finalIsActive = isActive !== undefined ? isActive : true;
-
-  /*
-  |--------------------------------------------------------------------------
-  | Published category must have valid state
-  |--------------------------------------------------------------------------
-  |
-  | Category has no parent dependency.
-  |
-  */
-
-  const category = await Category.create({
-    name: trimmedName,
-    slug,
-    description,
-    content,
-    icon,
-    order,
-    status: finalStatus,
-    isActive: finalIsActive,
+  const category = await prisma.category.create({
+    data: {
+      // Generate a unique 24-character hexadecimal ID.
+      id: crypto.randomBytes(12).toString("hex"),
+      name: trimmedName,
+      slug,
+      description: description ?? "",
+      ...(content !== undefined ? { content } : {}),
+      icon: icon ?? "",
+      order: order !== undefined ? Number(order) : 0,
+      status: status || "draft",
+      isActive: isActive !== undefined ? isActive : true,
+    },
   });
-
-  /*
-  |--------------------------------------------------------------------------
-  | MEDIA SYNC
-  |--------------------------------------------------------------------------
-  |
-  | Useful when category is created with rich content
-  | that already contains uploaded media.
-  |
-  */
 
   if (content !== undefined) {
     await syncContentMedia({
       entityType: "category",
-      entityId: category._id,
+      entityId: category.id,
       previousContent: null,
       nextContent: category.content,
     });
@@ -84,12 +69,12 @@ const createCategory = async ({
 */
 
 const getCategories = async () => {
-  return Category.find({
-    isActive: true,
-    status: "published",
-  }).sort({
-    order: 1,
-    name: 1,
+  return prisma.category.findMany({
+    where: {
+      isActive: true,
+      status: "published",
+    },
+    orderBy: [{ order: "asc" }, { name: "asc" }],
   });
 };
 
@@ -97,20 +82,11 @@ const getCategories = async () => {
 |--------------------------------------------------------------------------
 | ADMIN - GET ALL CATEGORIES
 |--------------------------------------------------------------------------
-|
-| Admin must receive:
-|
-| Draft + Active
-| Draft + Inactive
-| Published + Active
-| Published + Inactive
-|
 */
 
 const getAllCategoriesForAdmin = async () => {
-  return Category.find({}).sort({
-    order: 1,
-    name: 1,
+  return prisma.category.findMany({
+    orderBy: [{ order: "asc" }, { name: "asc" }],
   });
 };
 
@@ -121,10 +97,12 @@ const getAllCategoriesForAdmin = async () => {
 */
 
 const getCategoryBySlug = async (slug) => {
-  const category = await Category.findOne({
-    slug,
-    isActive: true,
-    status: "published",
+  const category = await prisma.category.findFirst({
+    where: {
+      slug,
+      isActive: true,
+      status: "published",
+    },
   });
 
   if (!category) {
@@ -141,147 +119,83 @@ const getCategoryBySlug = async (slug) => {
 */
 
 const updateCategory = async (categoryId, updateData) => {
-  if (!mongoose.Types.ObjectId.isValid(categoryId)) {
+  if (!isValidId(categoryId)) {
     throw new ApiError(400, "Invalid category ID");
   }
 
-  const category = await Category.findById(categoryId);
+  const category = await prisma.category.findUnique({
+    where: { id: categoryId },
+  });
 
   if (!category) {
     throw new ApiError(404, "Category not found");
   }
 
-  /*
-  |--------------------------------------------------------------------------
-  | Keep old content for media comparison
-  |--------------------------------------------------------------------------
-  */
-
   const previousContent = category.content;
-
-  /*
-  |--------------------------------------------------------------------------
-  | Name + Slug
-  |--------------------------------------------------------------------------
-  */
+  const data = {};
 
   if (updateData.name !== undefined && updateData.name.trim()) {
     const newName = updateData.name.trim();
-
     const newSlug = generateSlug(newName);
 
-    const existingCategory = await Category.findOne({
-      _id: {
-        $ne: categoryId,
+    const existingCategory = await prisma.category.findFirst({
+      where: {
+        id: { not: categoryId },
+        OR: [{ name: newName }, { slug: newSlug }],
       },
-
-      $or: [
-        {
-          name: newName,
-        },
-        {
-          slug: newSlug,
-        },
-      ],
     });
 
     if (existingCategory) {
       throw new ApiError(409, "Category with this name already exists");
     }
 
-    category.name = newName;
-    category.slug = newSlug;
+    data.name = newName;
+    data.slug = newSlug;
   }
-
-  /*
-  |--------------------------------------------------------------------------
-  | Description
-  |--------------------------------------------------------------------------
-  */
 
   if (updateData.description !== undefined) {
-    category.description = updateData.description;
+    data.description = updateData.description;
   }
-
-  /*
-  |--------------------------------------------------------------------------
-  | Content
-  |--------------------------------------------------------------------------
-  */
 
   if (updateData.content !== undefined) {
-    category.content = updateData.content;
+    data.content = updateData.content;
   }
-
-  /*
-  |--------------------------------------------------------------------------
-  | Icon
-  |--------------------------------------------------------------------------
-  */
 
   if (updateData.icon !== undefined) {
-    category.icon = updateData.icon;
+    data.icon = updateData.icon;
   }
-
-  /*
-  |--------------------------------------------------------------------------
-  | Order
-  |--------------------------------------------------------------------------
-  */
 
   if (updateData.order !== undefined) {
-    category.order = Number(updateData.order);
+    const order = Number(updateData.order);
+
+    if (!Number.isInteger(order)) {
+      throw new ApiError(400, "Invalid category order");
+    }
+
+    data.order = order;
   }
 
-  /*
-  |--------------------------------------------------------------------------
-  | Status
-  |--------------------------------------------------------------------------
-  */
-
   if (updateData.status !== undefined) {
-    if (updateData.status !== "draft" && updateData.status !== "published") {
+    if (!["draft", "published"].includes(updateData.status)) {
       throw new ApiError(400, "Invalid category status");
     }
 
-    category.status = updateData.status;
+    data.status = updateData.status;
   }
-
-  /*
-  |--------------------------------------------------------------------------
-  | Active State
-  |--------------------------------------------------------------------------
-  */
 
   if (updateData.isActive !== undefined) {
-    category.isActive = updateData.isActive;
+    data.isActive = updateData.isActive;
   }
 
-  /*
-  |--------------------------------------------------------------------------
-  | SAVE
-  |--------------------------------------------------------------------------
-  */
-
-  const updatedCategory = await category.save();
-
-  /*
-  |--------------------------------------------------------------------------
-  | MEDIA SYNC
-  |--------------------------------------------------------------------------
-  |
-  | This handles:
-  |
-  | 1. Newly added images
-  | 2. Removed images
-  | 3. Unused image deletion
-  |
-  */
+  const updatedCategory = await prisma.category.update({
+    where: { id: categoryId },
+    data,
+  });
 
   if (updateData.content !== undefined) {
     await syncContentMedia({
       entityType: "category",
-      entityId: updatedCategory._id,
+      entityId: updatedCategory.id,
       previousContent,
       nextContent: updatedCategory.content,
     });
@@ -297,11 +211,13 @@ const updateCategory = async (categoryId, updateData) => {
 */
 
 const deactivateCategory = async (categoryId) => {
-  if (!mongoose.Types.ObjectId.isValid(categoryId)) {
+  if (!isValidId(categoryId)) {
     throw new ApiError(400, "Invalid category ID");
   }
 
-  const category = await Category.findById(categoryId);
+  const category = await prisma.category.findUnique({
+    where: { id: categoryId },
+  });
 
   if (!category) {
     throw new ApiError(404, "Category not found");
@@ -311,11 +227,10 @@ const deactivateCategory = async (categoryId) => {
     return category;
   }
 
-  category.isActive = false;
-
-  const updatedCategory = await category.save();
-
-  return updatedCategory;
+  return prisma.category.update({
+    where: { id: categoryId },
+    data: { isActive: false },
+  });
 };
 
 /*
@@ -325,11 +240,13 @@ const deactivateCategory = async (categoryId) => {
 */
 
 const activateCategory = async (categoryId) => {
-  if (!mongoose.Types.ObjectId.isValid(categoryId)) {
+  if (!isValidId(categoryId)) {
     throw new ApiError(400, "Invalid category ID");
   }
 
-  const category = await Category.findById(categoryId);
+  const category = await prisma.category.findUnique({
+    where: { id: categoryId },
+  });
 
   if (!category) {
     throw new ApiError(404, "Category not found");
@@ -339,18 +256,11 @@ const activateCategory = async (categoryId) => {
     return category;
   }
 
-  category.isActive = true;
-
-  const updatedCategory = await category.save();
-
-  return updatedCategory;
+  return prisma.category.update({
+    where: { id: categoryId },
+    data: { isActive: true },
+  });
 };
-
-/*
-|--------------------------------------------------------------------------
-| EXPORTS
-|--------------------------------------------------------------------------
-*/
 
 module.exports = {
   createCategory,

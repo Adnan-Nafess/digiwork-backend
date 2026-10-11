@@ -1,12 +1,23 @@
-const mongoose = require("mongoose");
-
-const Article = require("../models/Article");
-const Category = require("../models/Category");
-const Subcategory = require("../models/Subcategory");
+const crypto = require("crypto");
+const prisma = require("../config/prisma");
 const ApiError = require("../utils/ApiError");
 const generateSlug = require("../utils/generateSlug");
 const calculateReadingTime = require("../utils/readingTime");
 const { syncContentMedia } = require("./media.service");
+
+const isValidId = (id) =>
+  typeof id === "string" && /^[a-f0-9]{24}$/i.test(id);
+
+const getPagination = (page, limit) => {
+  const safePage = Math.max(1, Number.parseInt(page, 10) || 1);
+  const safeLimit = Math.max(1, Number.parseInt(limit, 10) || 10);
+
+  return {
+    page: safePage,
+    limit: Math.min(safeLimit, 100),
+    skip: (safePage - 1) * Math.min(safeLimit, 100),
+  };
+};
 
 /*
 |--------------------------------------------------------------------------
@@ -24,39 +35,32 @@ const createArticle = async ({
   isActive,
   authorId,
 }) => {
-  if (!mongoose.Types.ObjectId.isValid(categoryId)) {
+  if (!isValidId(categoryId)) {
     throw new ApiError(400, "Invalid category ID");
   }
 
-  if (!mongoose.Types.ObjectId.isValid(subcategoryId)) {
+  if (!isValidId(subcategoryId)) {
     throw new ApiError(400, "Invalid subcategory ID");
   }
 
-  /*
-  |--------------------------------------------------------------------------
-  | Parent Category
-  |--------------------------------------------------------------------------
-  */
+  if (!isValidId(authorId)) {
+    throw new ApiError(400, "Invalid author ID");
+  }
 
-  const category = await Category.findOne({
-    _id: categoryId,
-    isActive: true,
+  const category = await prisma.category.findFirst({
+    where: { id: categoryId, isActive: true },
   });
 
   if (!category) {
     throw new ApiError(404, "Category not found or inactive");
   }
 
-  /*
-  |--------------------------------------------------------------------------
-  | Parent Subcategory
-  |--------------------------------------------------------------------------
-  */
-
-  const subcategory = await Subcategory.findOne({
-    _id: subcategoryId,
-    category: categoryId,
-    isActive: true,
+  const subcategory = await prisma.subcategory.findFirst({
+    where: {
+      id: subcategoryId,
+      categoryId,
+      isActive: true,
+    },
   });
 
   if (!subcategory) {
@@ -67,22 +71,13 @@ const createArticle = async ({
   }
 
   const finalStatus = status || "draft";
-
   const finalIsActive = isActive !== undefined ? isActive : true;
 
-  /*
-  |--------------------------------------------------------------------------
-  | Published Article Requirements
-  |--------------------------------------------------------------------------
-  |
-  | Published + active article requires:
-  |
-  | Category      → published + active
-  | Subcategory   → published + active
-  |
-  */
+  if (!["draft", "published"].includes(finalStatus)) {
+    throw new ApiError(400, "Invalid article status");
+  }
 
-  if (finalStatus === "published" && finalIsActive === true) {
+  if (finalStatus === "published" && finalIsActive) {
     if (category.status !== "published") {
       throw new ApiError(
         400,
@@ -96,80 +91,45 @@ const createArticle = async ({
         "Cannot publish article while its subcategory is not published",
       );
     }
-
-    if (!category.isActive) {
-      throw new ApiError(
-        400,
-        "Cannot activate article while its category is inactive",
-      );
-    }
-
-    if (!subcategory.isActive) {
-      throw new ApiError(
-        400,
-        "Cannot activate article while its subcategory is inactive",
-      );
-    }
   }
-
-  /*
-  |--------------------------------------------------------------------------
-  | Slug
-  |--------------------------------------------------------------------------
-  */
 
   const slug = generateSlug(title);
 
-  const existingArticle = await Article.findOne({
-    subcategory: subcategoryId,
-    slug,
+  const existingArticle = await prisma.article.findUnique({
+    where: {
+      subcategoryId_slug: {
+        subcategoryId,
+        slug,
+      },
+    },
   });
 
   if (existingArticle) {
     throw new ApiError(409, "Article already exists in this subcategory");
   }
 
-  /*
-  |--------------------------------------------------------------------------
-  | Reading Time
-  |--------------------------------------------------------------------------
-  */
-
   const readingTime = calculateReadingTime(content);
 
-  /*
-  |--------------------------------------------------------------------------
-  | CREATE
-  |--------------------------------------------------------------------------
-  */
-
-  const article = await Article.create({
-    category: categoryId,
-    subcategory: subcategoryId,
-    title,
-    slug,
-    excerpt,
-    content,
-    readingTime,
-    status: finalStatus,
-    isActive: finalIsActive,
-    author: authorId,
+  const article = await prisma.article.create({
+    data: {
+      id: crypto.randomBytes(12).toString("hex"),
+      categoryId,
+      subcategoryId,
+      title,
+      slug,
+      excerpt,
+      ...(content !== undefined ? { content } : {}),
+      readingTime,
+      status: finalStatus,
+      isActive: finalIsActive,
+      authorId,
+    },
   });
-
-  /*
-  |--------------------------------------------------------------------------
-  | MEDIA SYNC
-  |--------------------------------------------------------------------------
-  |
-  | Newly uploaded images initially have no usedBy reference.
-  | After the article is created, attach all image references.
-  |
-  */
 
   if (content !== undefined) {
     await syncContentMedia({
       entityType: "article",
-      entityId: article._id,
+      entityId: article.id,
       previousContent: null,
       nextContent: article.content,
     });
@@ -185,32 +145,48 @@ const createArticle = async ({
 */
 
 const getAllArticles = async (page = 1, limit = 10) => {
-  const skip = (page - 1) * limit;
+  const pagination = getPagination(page, limit);
 
   const [articles, total] = await Promise.all([
-    Article.find({})
-      .populate("category", "name slug status isActive")
-      .populate("subcategory", "name slug status isActive")
-      .populate("author", "name email")
-      .sort({
-        createdAt: -1,
-      })
-      .skip(skip)
-      .limit(limit),
-
-    Article.countDocuments({}),
+    prisma.article.findMany({
+      include: {
+        category: {
+          select: {
+            name: true,
+            slug: true,
+            status: true,
+            isActive: true,
+          },
+        },
+        subcategory: {
+          select: {
+            name: true,
+            slug: true,
+            status: true,
+            isActive: true,
+          },
+        },
+        author: {
+          select: {
+            name: true,
+            email: true,
+          },
+        },
+      },
+      orderBy: { createdAt: "desc" },
+      skip: pagination.skip,
+      take: pagination.limit,
+    }),
+    prisma.article.count(),
   ]);
-
-  const totalPages = Math.ceil(total / limit);
 
   return {
     articles,
-
     pagination: {
-      page,
-      limit,
+      page: pagination.page,
+      limit: pagination.limit,
       total,
-      totalPages,
+      totalPages: Math.ceil(total / pagination.limit),
     },
   };
 };
@@ -222,70 +198,51 @@ const getAllArticles = async (page = 1, limit = 10) => {
 */
 
 const getLatestArticles = async (page = 1, limit = 6) => {
-  const skip = (page - 1) * limit;
-
-  /*
-  |--------------------------------------------------------------------------
-  | Only published + active parents expose articles
-  |--------------------------------------------------------------------------
-  */
-
-  const [categories, subcategories] = await Promise.all([
-    Category.find({
-      isActive: true,
-      status: "published",
-    }).select("_id"),
-
-    Subcategory.find({
-      isActive: true,
-      status: "published",
-    }).select("_id"),
-  ]);
-
-  const categoryIds = categories.map((category) => category._id);
-
-  const subcategoryIds = subcategories.map((subcategory) => subcategory._id);
+  const pagination = getPagination(page, limit);
 
   const filter = {
-    category: {
-      $in: categoryIds,
-    },
-
-    subcategory: {
-      $in: subcategoryIds,
-    },
-
     status: "published",
-
     isActive: true,
+    category: {
+      is: { status: "published", isActive: true },
+    },
+    subcategory: {
+      is: { status: "published", isActive: true },
+    },
   };
 
   const [articles, total] = await Promise.all([
-    Article.find(filter)
-      .select(
-        "title slug excerpt readingTime createdAt updatedAt category subcategory",
-      )
-      .populate("category", "name slug")
-      .populate("subcategory", "name slug")
-      .sort({
-        createdAt: -1,
-      })
-      .skip(skip)
-      .limit(limit),
-
-    Article.countDocuments(filter),
+    prisma.article.findMany({
+      where: filter,
+      select: {
+        id: true,
+        title: true,
+        slug: true,
+        excerpt: true,
+        readingTime: true,
+        createdAt: true,
+        updatedAt: true,
+        category: {
+          select: { name: true, slug: true },
+        },
+        subcategory: {
+          select: { name: true, slug: true },
+        },
+      },
+      orderBy: { createdAt: "desc" },
+      skip: pagination.skip,
+      take: pagination.limit,
+    }),
+    prisma.article.count({ where: filter }),
   ]);
-
-  const totalPages = Math.ceil(total / limit);
 
   return {
     articles,
-
     pagination: {
-      page,
-      limit,
+      page: pagination.page,
+      limit: pagination.limit,
       total,
-      totalPages,
+      totalPages: Math.ceil(total / pagination.limit),
     },
   };
 };
@@ -302,60 +259,67 @@ const getArticlesBySubcategory = async (
   page = 1,
   limit = 10,
 ) => {
-  const category = await Category.findOne({
-    slug: categorySlug,
-    isActive: true,
-    status: "published",
+  const category = await prisma.category.findFirst({
+    where: {
+      slug: categorySlug,
+      isActive: true,
+      status: "published",
+    },
   });
 
   if (!category) {
     throw new ApiError(404, "Category not found");
   }
 
-  const subcategory = await Subcategory.findOne({
-    category: category._id,
-    slug: subcategorySlug,
-    isActive: true,
-    status: "published",
+  const subcategory = await prisma.subcategory.findFirst({
+    where: {
+      categoryId: category.id,
+      slug: subcategorySlug,
+      isActive: true,
+      status: "published",
+    },
   });
 
   if (!subcategory) {
     throw new ApiError(404, "Subcategory not found");
   }
 
-  const skip = (page - 1) * limit;
+  const pagination = getPagination(page, limit);
 
   const filter = {
-    category: category._id,
-    subcategory: subcategory._id,
+    categoryId: category.id,
+    subcategoryId: subcategory.id,
     status: "published",
     isActive: true,
   };
 
   const [articles, total] = await Promise.all([
-    Article.find(filter)
-      .select("title slug excerpt readingTime createdAt updatedAt")
-      .sort({
-        createdAt: -1,
-      })
-      .skip(skip)
-      .limit(limit),
-
-    Article.countDocuments(filter),
+    prisma.article.findMany({
+      where: filter,
+      select: {
+        title: true,
+        slug: true,
+        excerpt: true,
+        readingTime: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+      orderBy: { createdAt: "desc" },
+      skip: pagination.skip,
+      take: pagination.limit,
+    }),
+    prisma.article.count({ where: filter }),
   ]);
-
-  const totalPages = Math.ceil(total / limit);
 
   return {
     category,
     subcategory,
     articles,
-
     pagination: {
-      page,
-      limit,
+      page: pagination.page,
+      limit: pagination.limit,
       total,
-      totalPages,
+      totalPages: Math.ceil(total / pagination.limit),
     },
   };
 };
@@ -367,44 +331,51 @@ const getArticlesBySubcategory = async (
 */
 
 const getArticleBySlug = async (categorySlug, subcategorySlug, articleSlug) => {
-  const category = await Category.findOne({
-    slug: categorySlug,
-    isActive: true,
-    status: "published",
+  const category = await prisma.category.findFirst({
+    where: {
+      slug: categorySlug,
+      isActive: true,
+      status: "published",
+    },
   });
 
   if (!category) {
     throw new ApiError(404, "Category not found");
   }
 
-  const subcategory = await Subcategory.findOne({
-    category: category._id,
-    slug: subcategorySlug,
-    isActive: true,
-    status: "published",
+  const subcategory = await prisma.subcategory.findFirst({
+    where: {
+      categoryId: category.id,
+      slug: subcategorySlug,
+      isActive: true,
+      status: "published",
+    },
   });
 
   if (!subcategory) {
     throw new ApiError(404, "Subcategory not found");
   }
 
-  const article = await Article.findOne({
-    category: category._id,
-    subcategory: subcategory._id,
-    slug: articleSlug,
-    status: "published",
-    isActive: true,
-  }).populate("author", "name");
+  const article = await prisma.article.findFirst({
+    where: {
+      categoryId: category.id,
+      subcategoryId: subcategory.id,
+      slug: articleSlug,
+      status: "published",
+      isActive: true,
+    },
+    include: {
+      author: {
+        select: { name: true },
+      },
+    },
+  });
 
   if (!article) {
     throw new ApiError(404, "Article not found");
   }
 
-  return {
-    category,
-    subcategory,
-    article,
-  };
+  return { category, subcategory, article };
 };
 
 /*
@@ -414,77 +385,49 @@ const getArticleBySlug = async (categorySlug, subcategorySlug, articleSlug) => {
 */
 
 const updateArticle = async (articleId, updateData) => {
-  if (!mongoose.Types.ObjectId.isValid(articleId)) {
+  if (!isValidId(articleId)) {
     throw new ApiError(400, "Invalid article ID");
   }
 
-  const article = await Article.findById(articleId);
+  const article = await prisma.article.findUnique({
+    where: { id: articleId },
+  });
 
   if (!article) {
     throw new ApiError(404, "Article not found");
   }
 
-  /*
-  |--------------------------------------------------------------------------
-  | Keep old content for media comparison
-  |--------------------------------------------------------------------------
-  */
-
   const previousContent = article.content;
 
-  /*
-  |--------------------------------------------------------------------------
-  | Determine final parent IDs
-  |--------------------------------------------------------------------------
-  */
+  const finalCategoryId = updateData.categoryId || article.categoryId;
+  const finalSubcategoryId = updateData.subcategoryId || article.subcategoryId;
 
-  const finalCategoryId = updateData.categoryId || article.category.toString();
-
-  const finalSubcategoryId =
-    updateData.subcategoryId || article.subcategory.toString();
-
-  if (!mongoose.Types.ObjectId.isValid(finalCategoryId)) {
+  if (!isValidId(finalCategoryId)) {
     throw new ApiError(400, "Invalid category ID");
   }
 
-  if (!mongoose.Types.ObjectId.isValid(finalSubcategoryId)) {
+  if (!isValidId(finalSubcategoryId)) {
     throw new ApiError(400, "Invalid subcategory ID");
   }
 
-  /*
-  |--------------------------------------------------------------------------
-  | ADMIN EDITING
-  |--------------------------------------------------------------------------
-  |
-  | Important:
-  | Admin can edit an article even if its parent
-  | category/subcategory is inactive.
-  |
-  | Public visibility and publishing rules are
-  | handled separately below.
-  |
-  */
-
-  const category = await Category.findById(finalCategoryId);
+  const category = await prisma.category.findUnique({
+    where: { id: finalCategoryId },
+  });
 
   if (!category) {
     throw new ApiError(404, "Category not found");
   }
 
-  const subcategory = await Subcategory.findOne({
-    _id: finalSubcategoryId,
-    category: finalCategoryId,
+  const subcategory = await prisma.subcategory.findFirst({
+    where: {
+      id: finalSubcategoryId,
+      categoryId: finalCategoryId,
+    },
   });
 
   if (!subcategory) {
     throw new ApiError(404, "Subcategory not found in this category");
   }
-
-  /*
-  |--------------------------------------------------------------------------
-  | Determine final state
-  |--------------------------------------------------------------------------
-  */
 
   const finalStatus =
     updateData.status !== undefined ? updateData.status : article.status;
@@ -492,26 +435,11 @@ const updateArticle = async (articleId, updateData) => {
   const finalIsActive =
     updateData.isActive !== undefined ? updateData.isActive : article.isActive;
 
-  /*
-  |--------------------------------------------------------------------------
-  | Validate final status
-  |--------------------------------------------------------------------------
-  */
-
-  if (finalStatus !== "draft" && finalStatus !== "published") {
+  if (!["draft", "published"].includes(finalStatus)) {
     throw new ApiError(400, "Invalid article status");
   }
 
-  /*
-  |--------------------------------------------------------------------------
-  | Published + Active Article
-  |--------------------------------------------------------------------------
-  |
-  | Requires complete published + active hierarchy.
-  |
-  */
-
-  if (finalStatus === "published" && finalIsActive === true) {
+  if (finalStatus === "published" && finalIsActive) {
     if (category.status !== "published") {
       throw new ApiError(
         400,
@@ -540,16 +468,6 @@ const updateArticle = async (articleId, updateData) => {
       );
     }
   }
-
-  /*
-  |--------------------------------------------------------------------------
-  | Prevent activation under inactive parents
-  |--------------------------------------------------------------------------
-  |
-  | This matters when status remains draft but admin
-  | explicitly activates the article.
-  |
-  */
 
   if (updateData.isActive === true) {
     if (!category.isActive) {
@@ -567,30 +485,21 @@ const updateArticle = async (articleId, updateData) => {
     }
   }
 
-  const update = {
-    category: finalCategoryId,
-    subcategory: finalSubcategoryId,
+  const data = {
+    categoryId: finalCategoryId,
+    subcategoryId: finalSubcategoryId,
   };
-
-  /*
-  |--------------------------------------------------------------------------
-  | TITLE + SLUG
-  |--------------------------------------------------------------------------
-  */
 
   if (updateData.title !== undefined && updateData.title.trim()) {
     const newTitle = updateData.title.trim();
-
     const newSlug = generateSlug(newTitle);
 
-    const existingArticle = await Article.findOne({
-      _id: {
-        $ne: articleId,
+    const existingArticle = await prisma.article.findFirst({
+      where: {
+        id: { not: articleId },
+        subcategoryId: finalSubcategoryId,
+        slug: newSlug,
       },
-
-      subcategory: finalSubcategoryId,
-
-      slug: newSlug,
     });
 
     if (existingArticle) {
@@ -600,76 +509,36 @@ const updateArticle = async (articleId, updateData) => {
       );
     }
 
-    update.title = newTitle;
-
-    update.slug = newSlug;
+    data.title = newTitle;
+    data.slug = newSlug;
   }
-
-  /*
-  |--------------------------------------------------------------------------
-  | EXCERPT
-  |--------------------------------------------------------------------------
-  */
 
   if (updateData.excerpt !== undefined) {
-    update.excerpt = updateData.excerpt;
+    data.excerpt = updateData.excerpt;
   }
-
-  /*
-  |--------------------------------------------------------------------------
-  | CONTENT
-  |--------------------------------------------------------------------------
-  */
 
   if (updateData.content !== undefined) {
-    update.content = updateData.content;
-
-    update.readingTime = calculateReadingTime(updateData.content);
+    data.content = updateData.content;
+    data.readingTime = calculateReadingTime(updateData.content);
   }
-
-  /*
-  |--------------------------------------------------------------------------
-  | STATUS
-  |--------------------------------------------------------------------------
-  */
 
   if (updateData.status !== undefined) {
-    update.status = updateData.status;
+    data.status = updateData.status;
   }
-
-  /*
-  |--------------------------------------------------------------------------
-  | ACTIVE STATE
-  |--------------------------------------------------------------------------
-  */
 
   if (updateData.isActive !== undefined) {
-    update.isActive = updateData.isActive;
+    data.isActive = updateData.isActive;
   }
 
-  /*
-  |--------------------------------------------------------------------------
-  | SAVE ARTICLE
-  |--------------------------------------------------------------------------
-  */
-
-  Object.assign(article, update);
-
-  const updatedArticle = await article.save();
-
-  /*
-  |--------------------------------------------------------------------------
-  | MEDIA SYNC
-  |--------------------------------------------------------------------------
-  |
-  | Run only when article content changed.
-  |
-  */
+  const updatedArticle = await prisma.article.update({
+    where: { id: articleId },
+    data,
+  });
 
   if (updateData.content !== undefined) {
     await syncContentMedia({
       entityType: "article",
-      entityId: updatedArticle._id,
+      entityId: updatedArticle.id,
       previousContent,
       nextContent: updatedArticle.content,
     });
@@ -685,25 +554,24 @@ const updateArticle = async (articleId, updateData) => {
 */
 
 const deactivateArticle = async (articleId) => {
-  if (!mongoose.Types.ObjectId.isValid(articleId)) {
+  if (!isValidId(articleId)) {
     throw new ApiError(400, "Invalid article ID");
   }
 
-  const article = await Article.findById(articleId);
+  const article = await prisma.article.findUnique({
+    where: { id: articleId },
+  });
 
   if (!article) {
     throw new ApiError(404, "Article not found");
   }
 
-  if (!article.isActive) {
-    return article;
-  }
+  if (!article.isActive) return article;
 
-  article.isActive = false;
-
-  const updatedArticle = await article.save();
-
-  return updatedArticle;
+  return prisma.article.update({
+    where: { id: articleId },
+    data: { isActive: false },
+  });
 };
 
 /*
@@ -713,107 +581,71 @@ const deactivateArticle = async (articleId) => {
 */
 
 const activateArticle = async (articleId) => {
-  if (!mongoose.Types.ObjectId.isValid(articleId)) {
+  if (!isValidId(articleId)) {
     throw new ApiError(400, "Invalid article ID");
   }
 
-  const article = await Article.findById(articleId);
+  const article = await prisma.article.findUnique({
+    where: { id: articleId },
+  });
 
   if (!article) {
     throw new ApiError(404, "Article not found");
   }
 
-  if (article.isActive) {
-    return article;
+  if (article.isActive) return article;
+
+  const category = await prisma.category.findUnique({
+    where: { id: article.categoryId },
+  });
+
+  if (!category) {
+    throw new ApiError(404, "Parent category not found");
   }
 
-  /*
-  |--------------------------------------------------------------------------
-  | Parent hierarchy
-  |--------------------------------------------------------------------------
-  */
+  const subcategory = await prisma.subcategory.findUnique({
+    where: { id: article.subcategoryId },
+  });
 
-  const [category, subcategory] = await Promise.all([
-    Category.findOne({
-      _id: article.category,
-      isActive: true,
-      status: "published",
-    }),
+  if (!subcategory) {
+    throw new ApiError(404, "Parent subcategory not found");
+  }
 
-    Subcategory.findOne({
-      _id: article.subcategory,
-      category: article.category,
-      isActive: true,
-      status: "published",
-    }),
-  ]);
+  if (!category.isActive) {
+    throw new ApiError(
+      400,
+      "Cannot activate this article because its category is inactive",
+    );
+  }
 
-  /*
-  |--------------------------------------------------------------------------
-  | Published article
-  |--------------------------------------------------------------------------
-  */
+  if (!subcategory.isActive) {
+    throw new ApiError(
+      400,
+      "Cannot activate this article because its subcategory is inactive",
+    );
+  }
 
   if (article.status === "published") {
-    if (!category) {
+    if (category.status !== "published") {
       throw new ApiError(
         400,
-        "Cannot activate this article because its category is not published and active",
+        "Cannot activate this article because its category is not published",
       );
     }
 
-    if (!subcategory) {
+    if (subcategory.status !== "published") {
       throw new ApiError(
         400,
-        "Cannot activate this article because its subcategory is not published and active",
-      );
-    }
-  } else {
-    /*
-    |--------------------------------------------------------------------------
-    | Draft article can be activated when parent hierarchy
-    | is active. It does not need to be published.
-    |--------------------------------------------------------------------------
-    */
-
-    const activeCategory = await Category.findOne({
-      _id: article.category,
-      isActive: true,
-    });
-
-    if (!activeCategory) {
-      throw new ApiError(
-        400,
-        "Cannot activate this article because its category is inactive",
-      );
-    }
-
-    const activeSubcategory = await Subcategory.findOne({
-      _id: article.subcategory,
-      category: article.category,
-      isActive: true,
-    });
-
-    if (!activeSubcategory) {
-      throw new ApiError(
-        400,
-        "Cannot activate this article because its subcategory is inactive",
+        "Cannot activate this article because its subcategory is not published",
       );
     }
   }
 
-  article.isActive = true;
-
-  const updatedArticle = await article.save();
-
-  return updatedArticle;
+  return prisma.article.update({
+    where: { id: articleId },
+    data: { isActive: true },
+  });
 };
-
-/*
-|--------------------------------------------------------------------------
-| EXPORTS
-|--------------------------------------------------------------------------
-*/
 
 module.exports = {
   createArticle,

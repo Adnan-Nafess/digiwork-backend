@@ -18,7 +18,7 @@ const {
 const create = async (req, res) => {
   const article = await createArticle({
     ...req.body,
-    authorId: req.admin._id,
+    authorId: req.admin.id,
   });
 
   res.status(201).json({

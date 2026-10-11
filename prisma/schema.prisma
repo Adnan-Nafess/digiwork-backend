@@ -1,0 +1,115 @@
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model Admin {
+  id        String   @id @db.VarChar(24)
+  name      String   @db.VarChar(191)
+  email     String   @unique @db.VarChar(191)
+  password  String   @db.VarChar(255)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  articles Article[]
+}
+
+model Category {
+  id          String   @id @db.VarChar(24)
+  name        String   @db.VarChar(191)
+  slug        String   @unique @db.VarChar(191)
+description String @default("") @db.VarChar(191)
+  content     Json?
+  icon        String   @default("") @db.VarChar(191)
+  status      String   @default("draft") @db.VarChar(20)
+  isActive    Boolean  @default(true)
+  order       Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  subcategories Subcategory[]
+  articles      Article[]
+
+  @@index([status, isActive, order])
+}
+
+model Subcategory {
+  id          String   @id @db.VarChar(24)
+  categoryId  String   @db.VarChar(24)
+  name        String   @db.VarChar(191)
+  slug        String   @db.VarChar(191)
+  description String @default("") @db.VarChar(191)
+  content     Json?
+  order       Int      @default(0)
+  status      String   @default("draft") @db.VarChar(20)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  category Category  @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  articles Article[]
+
+  @@unique([categoryId, slug])
+  @@index([categoryId, status, isActive, order])
+}
+
+model Article {
+  id            String   @id @db.VarChar(24)
+  categoryId    String   @db.VarChar(24)
+  subcategoryId String   @db.VarChar(24)
+  title         String   @db.VarChar(191)
+  slug          String   @db.VarChar(191)
+  excerpt       String   @db.VarChar(500)
+  content       Json?
+  readingTime   Int      @default(1)
+  status        String   @default("draft") @db.VarChar(20)
+  isActive      Boolean  @default(true)
+  authorId      String   @db.VarChar(24)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  category    Category    @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  subcategory Subcategory @relation(fields: [subcategoryId], references: [id], onDelete: Restrict)
+  author      Admin       @relation(fields: [authorId], references: [id], onDelete: Restrict)
+
+  @@unique([subcategoryId, slug])
+  @@index([status, isActive, createdAt])
+}
+
+model Media {
+  id           String   @id @db.VarChar(24)
+  provider     String   @db.VarChar(30)
+  storageKey   String   @db.VarChar(500)
+  url          String   @db.VarChar(2048)
+  originalName String   @default("") @db.VarChar(255)
+  mimeType     String   @default("") @db.VarChar(191)
+  size         BigInt   @default(0)
+  width        Int?
+  height       Int?
+  format       String   @default("") @db.VarChar(50)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  references MediaReference[]
+
+  @@unique([provider, storageKey])
+}
+
+model MediaReference {
+  id         String   @id @default(cuid()) @db.VarChar(36)
+  mediaId    String   @db.VarChar(24)
+  entityType String   @db.VarChar(30)
+  entityId   String   @db.VarChar(24)
+  createdAt  DateTime @default(now())
+
+  media Media @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+
+  @@unique([mediaId, entityType, entityId])
+  @@index([entityType, entityId])
+}

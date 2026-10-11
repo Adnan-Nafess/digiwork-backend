@@ -1,10 +1,12 @@
-const mongoose = require("mongoose");
 
-const Subcategory = require("../models/Subcategory");
-const Category = require("../models/Category");
+const crypto = require("crypto");
+const prisma = require("../config/prisma");
 const ApiError = require("../utils/ApiError");
 const generateSlug = require("../utils/generateSlug");
 const { syncContentMedia } = require("./media.service");
+
+const isValidId = (id) =>
+  typeof id === "string" && /^[a-f0-9]{24}$/i.test(id);
 
 /*
 |--------------------------------------------------------------------------
@@ -17,19 +19,22 @@ const createSubcategory = async ({
   category,
   name,
   description,
+  content,
   order,
   status,
   isActive,
 }) => {
   const finalCategoryId = categoryId || category;
 
-  if (!mongoose.Types.ObjectId.isValid(finalCategoryId)) {
+  if (!isValidId(finalCategoryId)) {
     throw new ApiError(400, "Invalid category ID");
   }
 
-  const parentCategory = await Category.findOne({
-    _id: finalCategoryId,
-    isActive: true,
+  const parentCategory = await prisma.category.findFirst({
+    where: {
+      id: finalCategoryId,
+      isActive: true,
+    },
   });
 
   if (!parentCategory) {
@@ -39,9 +44,13 @@ const createSubcategory = async ({
   const trimmedName = name.trim();
   const slug = generateSlug(trimmedName);
 
-  const existingSubcategory = await Subcategory.findOne({
-    category: finalCategoryId,
-    slug,
+  const existingSubcategory = await prisma.subcategory.findUnique({
+    where: {
+      categoryId_slug: {
+        categoryId: finalCategoryId,
+        slug,
+      },
+    },
   });
 
   if (existingSubcategory) {
@@ -51,11 +60,9 @@ const createSubcategory = async ({
   const finalStatus = status || "draft";
   const finalIsActive = isActive !== undefined ? isActive : true;
 
-  /*
-  |--------------------------------------------------------------------------
-  | Published subcategory requires published + active category
-  |--------------------------------------------------------------------------
-  */
+  if (!["draft", "published"].includes(finalStatus)) {
+    throw new ApiError(400, "Invalid subcategory status");
+  }
 
   if (finalStatus === "published" && parentCategory.status !== "published") {
     throw new ApiError(
@@ -66,7 +73,7 @@ const createSubcategory = async ({
 
   if (
     finalStatus === "published" &&
-    finalIsActive === true &&
+    finalIsActive &&
     !parentCategory.isActive
   ) {
     throw new ApiError(
@@ -75,17 +82,19 @@ const createSubcategory = async ({
     );
   }
 
-  const subcategory = await Subcategory.create({
-    category: finalCategoryId,
-    name: trimmedName,
-    slug,
-    description: description || "",
-    order: order || 0,
-    status: finalStatus,
-    isActive: finalIsActive,
+  return prisma.subcategory.create({
+    data: {
+      id: crypto.randomBytes(12).toString("hex"),
+      categoryId: finalCategoryId,
+      name: trimmedName,
+      slug,
+      description: description || "",
+      ...(content !== undefined ? { content } : {}),
+      order: order !== undefined ? Number(order) : 0,
+      status: finalStatus,
+      isActive: finalIsActive,
+    },
   });
-
-  return subcategory;
 };
 
 /*
@@ -95,29 +104,28 @@ const createSubcategory = async ({
 */
 
 const getSubcategories = async (categorySlug) => {
-  const category = await Category.findOne({
-    slug: categorySlug,
-    isActive: true,
-    status: "published",
+  const category = await prisma.category.findFirst({
+    where: {
+      slug: categorySlug,
+      isActive: true,
+      status: "published",
+    },
   });
 
   if (!category) {
     throw new ApiError(404, "Category not found");
   }
 
-  const subcategories = await Subcategory.find({
-    category: category._id,
-    isActive: true,
-    status: "published",
-  }).sort({
-    order: 1,
-    createdAt: 1,
+  const subcategories = await prisma.subcategory.findMany({
+    where: {
+      categoryId: category.id,
+      isActive: true,
+      status: "published",
+    },
+    orderBy: [{ order: "asc" }, { createdAt: "asc" }],
   });
 
-  return {
-    category,
-    subcategories,
-  };
+  return { category, subcategories };
 };
 
 /*
@@ -127,65 +135,55 @@ const getSubcategories = async (categorySlug) => {
 */
 
 const getSubcategoryBySlug = async (categorySlug, subcategorySlug) => {
-  const category = await Category.findOne({
-    slug: categorySlug,
-    isActive: true,
-    status: "published",
+  const category = await prisma.category.findFirst({
+    where: {
+      slug: categorySlug,
+      isActive: true,
+      status: "published",
+    },
   });
 
   if (!category) {
     throw new ApiError(404, "Category not found");
   }
 
-  const subcategory = await Subcategory.findOne({
-    category: category._id,
-    slug: subcategorySlug,
-    isActive: true,
-    status: "published",
+  const subcategory = await prisma.subcategory.findFirst({
+    where: {
+      categoryId: category.id,
+      slug: subcategorySlug,
+      isActive: true,
+      status: "published",
+    },
   });
 
   if (!subcategory) {
     throw new ApiError(404, "Subcategory not found");
   }
 
-  return {
-    category,
-    subcategory,
-  };
+  return { category, subcategory };
 };
 
 /*
 |--------------------------------------------------------------------------
 | ADMIN - GET ALL
 |--------------------------------------------------------------------------
-|
-| IMPORTANT:
-| Admin must see all subcategories regardless of:
-| - draft/published
-| - active/inactive
-|--------------------------------------------------------------------------
 */
 
 const getAllSubcategoriesForAdmin = async (categorySlug) => {
-  const category = await Category.findOne({
-    slug: categorySlug,
+  const category = await prisma.category.findUnique({
+    where: { slug: categorySlug },
   });
 
   if (!category) {
     throw new ApiError(404, "Category not found");
   }
 
-  const subcategories = await Subcategory.find({
-    category: category._id,
-  }).sort({
-    order: 1,
-    createdAt: 1,
+  const subcategories = await prisma.subcategory.findMany({
+    where: { categoryId: category.id },
+    orderBy: [{ order: "asc" }, { createdAt: "asc" }],
   });
 
-  return {
-    category,
-    subcategories,
-  };
+  return { category, subcategories };
 };
 
 /*
@@ -195,72 +193,51 @@ const getAllSubcategoriesForAdmin = async (categorySlug) => {
 */
 
 const updateSubcategory = async (subcategoryId, updateData) => {
-  if (!mongoose.Types.ObjectId.isValid(subcategoryId)) {
+  if (!isValidId(subcategoryId)) {
     throw new ApiError(400, "Invalid subcategory ID");
   }
 
-  const subcategory = await Subcategory.findById(subcategoryId);
+  const subcategory = await prisma.subcategory.findUnique({
+    where: { id: subcategoryId },
+  });
 
   if (!subcategory) {
     throw new ApiError(404, "Subcategory not found");
   }
 
-  /*
-  |--------------------------------------------------------------------------
-  | Keep old content for media comparison
-  |--------------------------------------------------------------------------
-  */
-
   const previousContent = subcategory.content;
-
-  /*
-  |--------------------------------------------------------------------------
-  | Determine final category
-  |--------------------------------------------------------------------------
-  */
 
   const finalCategoryId =
     updateData.categoryId ||
     updateData.category ||
-    subcategory.category.toString();
+    subcategory.categoryId;
 
-  if (!mongoose.Types.ObjectId.isValid(finalCategoryId)) {
+  if (!isValidId(finalCategoryId)) {
     throw new ApiError(400, "Invalid category ID");
   }
 
-  /*
-  |--------------------------------------------------------------------------
-  | Admin editing does NOT require active parent category
-  |--------------------------------------------------------------------------
-  */
-
-  const category = await Category.findById(finalCategoryId);
+  const category = await prisma.category.findUnique({
+    where: { id: finalCategoryId },
+  });
 
   if (!category) {
     throw new ApiError(404, "Category not found");
   }
 
   const update = {
-    category: finalCategoryId,
+    categoryId: finalCategoryId,
   };
-
-  /*
-  |--------------------------------------------------------------------------
-  | Name + Slug
-  |--------------------------------------------------------------------------
-  */
 
   if (updateData.name !== undefined && updateData.name.trim()) {
     const newName = updateData.name.trim();
-
     const newSlug = generateSlug(newName);
 
-    const existingSubcategory = await Subcategory.findOne({
-      _id: {
-        $ne: subcategoryId,
+    const existingSubcategory = await prisma.subcategory.findFirst({
+      where: {
+        id: { not: subcategoryId },
+        categoryId: finalCategoryId,
+        slug: newSlug,
       },
-      category: finalCategoryId,
-      slug: newSlug,
     });
 
     if (existingSubcategory) {
@@ -274,107 +251,47 @@ const updateSubcategory = async (subcategoryId, updateData) => {
     update.slug = newSlug;
   }
 
-  /*
-  |--------------------------------------------------------------------------
-  | Description
-  |--------------------------------------------------------------------------
-  */
-
   if (updateData.description !== undefined) {
     update.description = updateData.description;
   }
-
-  /*
-  |--------------------------------------------------------------------------
-  | Rich Content
-  |--------------------------------------------------------------------------
-  */
 
   if (updateData.content !== undefined) {
     update.content = updateData.content;
   }
 
-  /*
-  |--------------------------------------------------------------------------
-  | Order
-  |--------------------------------------------------------------------------
-  */
-
   if (updateData.order !== undefined) {
-    update.order = Number(updateData.order);
+    const order = Number(updateData.order);
+
+    if (!Number.isInteger(order)) {
+      throw new ApiError(400, "Invalid subcategory order");
+    }
+
+    update.order = order;
   }
 
-  /*
-  |--------------------------------------------------------------------------
-  | Determine final state
-  |--------------------------------------------------------------------------
-  */
-
   const finalStatus =
-    updateData.status !== undefined ? updateData.status : subcategory.status;
+    updateData.status !== undefined
+      ? updateData.status
+      : subcategory.status;
 
   const finalIsActive =
     updateData.isActive !== undefined
       ? updateData.isActive
       : subcategory.isActive;
 
-  /*
-  |--------------------------------------------------------------------------
-  | Status
-  |--------------------------------------------------------------------------
-  */
-
   if (updateData.status !== undefined) {
-    if (updateData.status !== "draft" && updateData.status !== "published") {
+    if (!["draft", "published"].includes(updateData.status)) {
       throw new ApiError(400, "Invalid subcategory status");
-    }
-
-    /*
-    |--------------------------------------------------------------------------
-    | Published requires published parent
-    |--------------------------------------------------------------------------
-    */
-
-    if (updateData.status === "published" && category.status !== "published") {
-      throw new ApiError(
-        400,
-        "Cannot publish subcategory while its category is not published",
-      );
     }
 
     update.status = updateData.status;
   }
 
-  /*
-  |--------------------------------------------------------------------------
-  | Active State
-  |--------------------------------------------------------------------------
-  */
-
   if (updateData.isActive !== undefined) {
-    /*
-    |--------------------------------------------------------------------------
-    | Cannot activate child under inactive category
-    |--------------------------------------------------------------------------
-    */
-
-    if (updateData.isActive === true && !category.isActive) {
-      throw new ApiError(
-        400,
-        "Cannot activate subcategory while its category is inactive",
-      );
-    }
-
     update.isActive = updateData.isActive;
   }
 
-  /*
-  |--------------------------------------------------------------------------
-  | Published + Active requires active parent
-  |--------------------------------------------------------------------------
-  */
-
-  if (finalStatus === "published" && finalIsActive === true) {
+  if (finalStatus === "published" && finalIsActive) {
     if (category.status !== "published") {
       throw new ApiError(
         400,
@@ -390,29 +307,22 @@ const updateSubcategory = async (subcategoryId, updateData) => {
     }
   }
 
-  /*
-  |--------------------------------------------------------------------------
-  | SAVE
-  |--------------------------------------------------------------------------
-  */
+  if (updateData.isActive === true && !category.isActive) {
+    throw new ApiError(
+      400,
+      "Cannot activate subcategory while its category is inactive",
+    );
+  }
 
-  Object.assign(subcategory, update);
-
-  const updatedSubcategory = await subcategory.save();
-
-  /*
-  |--------------------------------------------------------------------------
-  | MEDIA SYNC
-  |--------------------------------------------------------------------------
-  |
-  | Only sync when content actually changed.
-  |
-  */
+  const updatedSubcategory = await prisma.subcategory.update({
+    where: { id: subcategoryId },
+    data: update,
+  });
 
   if (updateData.content !== undefined) {
     await syncContentMedia({
       entityType: "subcategory",
-      entityId: updatedSubcategory._id,
+      entityId: updatedSubcategory.id,
       previousContent,
       nextContent: updatedSubcategory.content,
     });
@@ -428,11 +338,13 @@ const updateSubcategory = async (subcategoryId, updateData) => {
 */
 
 const deactivateSubcategory = async (subcategoryId) => {
-  if (!mongoose.Types.ObjectId.isValid(subcategoryId)) {
+  if (!isValidId(subcategoryId)) {
     throw new ApiError(400, "Invalid subcategory ID");
   }
 
-  const subcategory = await Subcategory.findById(subcategoryId);
+  const subcategory = await prisma.subcategory.findUnique({
+    where: { id: subcategoryId },
+  });
 
   if (!subcategory) {
     throw new ApiError(404, "Subcategory not found");
@@ -442,11 +354,10 @@ const deactivateSubcategory = async (subcategoryId) => {
     return subcategory;
   }
 
-  subcategory.isActive = false;
-
-  const updatedSubcategory = await subcategory.save();
-
-  return updatedSubcategory;
+  return prisma.subcategory.update({
+    where: { id: subcategoryId },
+    data: { isActive: false },
+  });
 };
 
 /*
@@ -456,11 +367,13 @@ const deactivateSubcategory = async (subcategoryId) => {
 */
 
 const activateSubcategory = async (subcategoryId) => {
-  if (!mongoose.Types.ObjectId.isValid(subcategoryId)) {
+  if (!isValidId(subcategoryId)) {
     throw new ApiError(400, "Invalid subcategory ID");
   }
 
-  const subcategory = await Subcategory.findById(subcategoryId);
+  const subcategory = await prisma.subcategory.findUnique({
+    where: { id: subcategoryId },
+  });
 
   if (!subcategory) {
     throw new ApiError(404, "Subcategory not found");
@@ -470,7 +383,9 @@ const activateSubcategory = async (subcategoryId) => {
     return subcategory;
   }
 
-  const category = await Category.findById(subcategory.category);
+  const category = await prisma.category.findUnique({
+    where: { id: subcategory.categoryId },
+  });
 
   if (!category) {
     throw new ApiError(404, "Parent category not found");
@@ -483,25 +398,20 @@ const activateSubcategory = async (subcategoryId) => {
     );
   }
 
-  /*
-  |--------------------------------------------------------------------------
-  | A published subcategory can be active only
-  | when its parent category is also published.
-  |--------------------------------------------------------------------------
-  */
-
-  if (subcategory.status === "published" && category.status !== "published") {
+  if (
+    subcategory.status === "published" &&
+    category.status !== "published"
+  ) {
     throw new ApiError(
       400,
       "Cannot activate published subcategory while its category is not published",
     );
   }
 
-  subcategory.isActive = true;
-
-  const updatedSubcategory = await subcategory.save();
-
-  return updatedSubcategory;
+  return prisma.subcategory.update({
+    where: { id: subcategoryId },
+    data: { isActive: true },
+  });
 };
 
 module.exports = {

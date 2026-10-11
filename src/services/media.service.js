@@ -1,8 +1,9 @@
-const mongoose = require("mongoose");
-
-const Media = require("../models/Media");
+const prisma = require("../config/prisma");
 const ApiError = require("../utils/ApiError");
 const storage = require("../storage/storage.service");
+
+const isValidId = (id) =>
+  typeof id === "string" && /^[a-f0-9]{24}$/i.test(id);
 
 /*
 |--------------------------------------------------------------------------
@@ -11,9 +12,7 @@ const storage = require("../storage/storage.service");
 */
 
 const parseContent = (content) => {
-  if (!content) {
-    return null;
-  }
+  if (!content) return null;
 
   if (typeof content === "string") {
     try {
@@ -36,16 +35,14 @@ const extractMediaIds = (content) => {
   const mediaIds = new Set();
 
   const walk = (node) => {
-    if (!node || typeof node !== "object") {
-      return;
-    }
+    if (!node || typeof node !== "object") return;
 
     if (
       node.type === "image" &&
-      node.attrs?.mediaId &&
-      mongoose.Types.ObjectId.isValid(node.attrs.mediaId)
+      typeof node.attrs?.mediaId === "string" &&
+      isValidId(node.attrs.mediaId)
     ) {
-      mediaIds.add(node.attrs.mediaId.toString());
+      mediaIds.add(node.attrs.mediaId);
     }
 
     if (Array.isArray(node.content)) {
@@ -74,46 +71,37 @@ const uploadEditorImage = async (file) => {
   try {
     uploadedImage = await storage.uploadImage(file);
 
-    if (!uploadedImage?.storageKey) {
-      throw new Error("Storage key was not generated.");
+    if (!uploadedImage?.storageKey || !uploadedImage?.url) {
+      throw new Error("Storage key or image URL was not generated.");
     }
 
-    if (!uploadedImage?.url) {
-      throw new Error("Image URL was not generated.");
-    }
-
-    const media = await Media.create({
-      provider: uploadedImage.provider,
-      storageKey: uploadedImage.storageKey,
-      url: uploadedImage.url,
-      originalName: uploadedImage.originalName || file.originalname || "",
-      mimeType: uploadedImage.mimeType || file.mimetype || "",
-      size: uploadedImage.size || file.size || 0,
-      width: uploadedImage.width,
-      height: uploadedImage.height,
-      format: uploadedImage.format,
-      usedBy: [],
+    const media = await prisma.media.create({
+      data: {
+        provider: uploadedImage.provider,
+        storageKey: uploadedImage.storageKey,
+        url: uploadedImage.url,
+        originalName: uploadedImage.originalName || file.originalname || "",
+        mimeType: uploadedImage.mimeType || file.mimetype || "",
+        size: BigInt(uploadedImage.size || file.size || 0),
+        width: uploadedImage.width ?? null,
+        height: uploadedImage.height ?? null,
+        format: uploadedImage.format || "",
+      },
     });
 
     return {
-      mediaId: media._id.toString(),
+      mediaId: media.id,
       provider: media.provider,
       storageKey: media.storageKey,
       url: media.url,
       originalName: media.originalName,
       mimeType: media.mimeType,
-      size: media.size,
+      size: Number(media.size),
       width: media.width,
       height: media.height,
       format: media.format,
     };
   } catch (error) {
-    /*
-    |--------------------------------------------------------------------------
-    | Rollback storage upload if MongoDB creation fails.
-    |--------------------------------------------------------------------------
-    */
-
     if (uploadedImage?.storageKey) {
       try {
         await storage.deleteImage(uploadedImage.storageKey);
@@ -127,7 +115,6 @@ const uploadEditorImage = async (file) => {
     }
 
     console.error("Editor image upload error:", error);
-
     throw new ApiError(500, "Unable to upload image.");
   }
 };
@@ -137,16 +124,8 @@ const uploadEditorImage = async (file) => {
 | SYNC CONTENT MEDIA
 |--------------------------------------------------------------------------
 |
-| Called AFTER content is successfully saved.
-|
-| Existing references:
-| old content
-|
-| Current references:
-| new content
-|
-| Removed media is deleted physically only when
-| no other content is using it.
+| Called after content is successfully saved.
+| References are stored in the MediaReference table.
 |
 */
 
@@ -160,76 +139,89 @@ const syncContentMedia = async ({
     throw new ApiError(400, "Invalid media entity type.");
   }
 
-  if (!mongoose.Types.ObjectId.isValid(entityId)) {
+  if (!isValidId(entityId)) {
     throw new ApiError(400, "Invalid media entity ID.");
   }
 
   const previousMediaIds = extractMediaIds(previousContent);
-
   const nextMediaIds = extractMediaIds(nextContent);
 
   const previousSet = new Set(previousMediaIds);
-
   const nextSet = new Set(nextMediaIds);
 
-  const addedMediaIds = nextMediaIds.filter(
-    (mediaId) => !previousSet.has(mediaId),
-  );
+  const addedMediaIds = nextMediaIds.filter((id) => !previousSet.has(id));
 
-  const removedMediaIds = previousMediaIds.filter(
-    (mediaId) => !nextSet.has(mediaId),
-  );
+  const removedMediaIds = previousMediaIds.filter((id) => !nextSet.has(id));
 
-  /*
-  |--------------------------------------------------------------------------
-  | ADD CURRENT REFERENCES
-  |--------------------------------------------------------------------------
-  */
+  const validAddedIds = [];
 
   for (const mediaId of addedMediaIds) {
-    await Media.updateOne(
-      {
-        _id: mediaId,
-      },
-      {
-        $addToSet: {
-          usedBy: {
-            entityType,
-            entityId,
-          },
-        },
-      },
-    );
+    const media = await prisma.media.findUnique({
+      where: { id: mediaId },
+      select: { id: true },
+    });
+
+    if (media) {
+      validAddedIds.push(mediaId);
+    } else {
+      console.warn(`Media ${mediaId} was not found; reference skipped.`);
+    }
   }
 
   /*
   |--------------------------------------------------------------------------
-  | REMOVE OLD REFERENCES
+  | ADD REFERENCES
+  |--------------------------------------------------------------------------
+  */
+
+  for (const mediaId of validAddedIds) {
+    await prisma.mediaReference.upsert({
+      where: {
+        mediaId_entityType_entityId: {
+          mediaId,
+          entityType,
+          entityId,
+        },
+      },
+      create: {
+        mediaId,
+        entityType,
+        entityId,
+      },
+      update: {},
+    });
+  }
+
+  /*
+  |--------------------------------------------------------------------------
+  | REMOVE REFERENCES
   |--------------------------------------------------------------------------
   */
 
   const mediaToCheckForDeletion = [];
 
   for (const mediaId of removedMediaIds) {
-    const media = await Media.findOneAndUpdate(
-      {
-        _id: mediaId,
-      },
-      {
-        $pull: {
-          usedBy: {
-            entityType,
-            entityId,
-          },
-        },
-      },
-      {
-        returnDocument: "after",
-      },
-    );
+    const existingMedia = await prisma.media.findUnique({
+      where: { id: mediaId },
+      select: { id: true, storageKey: true },
+    });
 
-    if (media && (!media.usedBy || media.usedBy.length === 0)) {
-      mediaToCheckForDeletion.push(media);
+    if (!existingMedia) continue;
+
+    await prisma.mediaReference.deleteMany({
+      where: {
+        mediaId,
+        entityType,
+        entityId,
+      },
+    });
+
+    const remainingReferences = await prisma.mediaReference.count({
+      where: { mediaId },
+    });
+
+    if (remainingReferences === 0) {
+      mediaToCheckForDeletion.push(existingMedia);
     }
   }
 
@@ -241,34 +233,32 @@ const syncContentMedia = async ({
 
   for (const media of mediaToCheckForDeletion) {
     try {
-      /*
-       * Re-check before physical deletion.
-       * Another content record may have referenced
-       * the same media meanwhile.
-       */
+      // Re-check before deleting the physical image.
+      const latestMedia = await prisma.media.findUnique({
+        where: { id: media.id },
+        include: { references: true },
+      });
 
-      const latestMedia = await Media.findById(media._id);
-
-      if (!latestMedia) {
-        continue;
-      }
-
-      if (latestMedia.usedBy && latestMedia.usedBy.length > 0) {
+      if (!latestMedia || latestMedia.references.length > 0) {
         continue;
       }
 
       await storage.deleteImage(latestMedia.storageKey);
 
-      await Media.deleteOne({
-        _id: latestMedia._id,
+      // Conditional delete protects against references added meanwhile.
+      await prisma.media.deleteMany({
+        where: {
+          id: latestMedia.id,
+          references: { none: {} },
+        },
       });
     } catch (error) {
-      console.error(`Unable to delete unused media ${media._id}:`, error);
+      console.error(`Unable to delete unused media ${media.id}:`, error);
     }
   }
 
   return {
-    addedMediaIds,
+    addedMediaIds: validAddedIds,
     removedMediaIds,
   };
 };

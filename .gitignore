@@ -12,3 +12,9 @@ build/
 
 .DS_Store
 Thumbs.db
+/src/generated/prisma
+
+
+# Temporary authentication files
+cookies.txt
+login-response.json
