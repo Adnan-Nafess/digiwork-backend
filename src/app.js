@@ -123,6 +123,13 @@ app.use("/api/admin/media", mediaRoutes);
 |--------------------------------------------------------------------------
 */
 
+app.get("/", (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: "Dailyfix API is running",
+  });
+});
+
 app.get("/api/health", (req, res) => {
   res.status(200).json({
     success: true,
