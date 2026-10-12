@@ -1,13 +1,18 @@
-import "dotenv/config";
+import { existsSync } from "node:fs";
 import { defineConfig } from "prisma/config";
 
+// Load local .env when present. GoDaddy environment variables are injected automatically.
+if (existsSync(".env")) {
+  process.loadEnvFile(".env");
+}
+
 function getDatabaseUrl(): string {
-  // Local development: existing .env DATABASE_URL will continue to work.
+  // Local development: use DATABASE_URL from .env.
   if (process.env.DATABASE_URL) {
     return process.env.DATABASE_URL;
   }
 
-  // GoDaddy: build the MySQL URL from the injected DB_* variables.
+  // GoDaddy: construct the URL from its hosted MySQL variables.
   const { DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD } = process.env;
 
   if (!DB_HOST || !DB_NAME || !DB_USER || DB_PASSWORD === undefined) {

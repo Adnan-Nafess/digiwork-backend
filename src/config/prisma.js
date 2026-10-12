@@ -1,15 +1,18 @@
+const { existsSync } = require("node:fs");
 
-require("dotenv").config();
+// Load local .env only when it exists.
+// GoDaddy's injected environment variables remain available.
+if (existsSync(".env")) {
+  process.loadEnvFile(".env");
+}
 
 const { PrismaClient } = require("../generated/prisma");
 
 function getDatabaseUrl() {
-  // Local development uses DATABASE_URL from .env.
   if (process.env.DATABASE_URL) {
     return process.env.DATABASE_URL;
   }
 
-  // GoDaddy provides these variables when its hosted database is attached.
   const {
     DB_HOST,
     DB_PORT,
