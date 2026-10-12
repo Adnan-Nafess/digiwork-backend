@@ -6,22 +6,20 @@ if (existsSync(".env")) {
 }
 
 function getDatabaseUrl(): string | undefined {
-  if (process.env.DATABASE_URL) {
-    return process.env.DATABASE_URL;
-  }
-
   const { DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD } = process.env;
 
-  if (!DB_HOST || !DB_NAME || !DB_USER || DB_PASSWORD === undefined) {
-    return undefined;
+  // Prefer GoDaddy's hosted MySQL credentials.
+  if (DB_HOST && DB_NAME && DB_USER && DB_PASSWORD !== undefined) {
+    const user = encodeURIComponent(DB_USER);
+    const password = encodeURIComponent(DB_PASSWORD);
+    const database = encodeURIComponent(DB_NAME);
+    const port = DB_PORT || "3306";
+
+    return `mysql://${user}:${password}@${DB_HOST}:${port}/${database}`;
   }
 
-  const user = encodeURIComponent(DB_USER);
-  const password = encodeURIComponent(DB_PASSWORD);
-  const database = encodeURIComponent(DB_NAME);
-  const port = DB_PORT || "3306";
-
-  return `mysql://${user}:${password}@${DB_HOST}:${port}/${database}`;
+  // Local development fallback. Do not require this during hosted builds.
+  return process.env.DATABASE_URL;
 }
 
 const url = getDatabaseUrl();
