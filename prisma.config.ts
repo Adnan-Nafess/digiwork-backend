@@ -18,7 +18,7 @@ function getDatabaseUrl(): string | undefined {
     return `mysql://${user}:${password}@${DB_HOST}:${port}/${database}`;
   }
 
-  // Local development fallback. Do not require this during hosted builds.
+  // Local development fallback.
   return process.env.DATABASE_URL;
 }
 
