@@ -24,6 +24,18 @@ function getDatabaseUrl(): string | undefined {
 
 const url = getDatabaseUrl();
 
+// Set DATABASE_URL for Prisma schema and migration commands.
+if (url) {
+  process.env.DATABASE_URL = url;
+}
+
+console.log(
+  "[Prisma config] Hosted DB_HOST available:",
+  Boolean(process.env.DB_HOST),
+  "| DATABASE_URL resolved:",
+  Boolean(process.env.DATABASE_URL),
+);
+
 export default defineConfig({
   schema: "prisma/schema.prisma",
   migrations: {
