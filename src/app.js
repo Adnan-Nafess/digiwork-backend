@@ -31,6 +31,7 @@ app.use(helmet());
 const allowedOrigins = [
   process.env.CLIENT_URL,
   process.env.ADMIN_URL,
+  process.env.ADMIN_PREVIEW_URL,
   "http://localhost:5173",
   "http://localhost:5174",
 ].filter(Boolean);
