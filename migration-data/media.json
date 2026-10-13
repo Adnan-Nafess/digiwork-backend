@@ -1,0 +1,117 @@
+[
+  {
+    "provider": "cloudinary",
+    "storageKey": "dailyfix/editor/vxo3iomcuqnn9ot1ziek",
+    "url": "https://res.cloudinary.com/douj83s0t/image/upload/v1789515228/dailyfix/editor/vxo3iomcuqnn9ot1ziek.webp",
+    "originalName": "hardware.webp",
+    "mimeType": "image/webp",
+    "size": 21894,
+    "width": 800,
+    "height": 800,
+    "format": "webp",
+    "usedBy": [],
+    "createdAt": "2026-09-15T23:33:50.000Z",
+    "updatedAt": "2026-09-15T23:33:50.000Z",
+    "id": "6aa9d5dd90003ddaaa28eb47"
+  },
+  {
+    "provider": "cloudinary",
+    "storageKey": "dailyfix/editor/wudmmeia3khpbgvcnlcg",
+    "url": "https://res.cloudinary.com/douj83s0t/image/upload/v1789515502/dailyfix/editor/wudmmeia3khpbgvcnlcg.webp",
+    "originalName": "hardware.webp",
+    "mimeType": "image/webp",
+    "size": 21894,
+    "width": 800,
+    "height": 800,
+    "format": "webp",
+    "usedBy": [
+      {
+        "entityType": "category",
+        "entityId": "6aa71d2578d58eb7e2201d30"
+      }
+    ],
+    "createdAt": "2026-09-15T23:38:23.968Z",
+    "updatedAt": "2026-09-15T23:38:26.535Z",
+    "id": "6aa9d6ef90003ddaaa28eb48"
+  },
+  {
+    "provider": "cloudinary",
+    "storageKey": "dailyfix/editor/tdd7mjxb0r0edpgdhez0",
+    "url": "https://res.cloudinary.com/douj83s0t/image/upload/v1789515691/dailyfix/editor/tdd7mjxb0r0edpgdhez0.webp",
+    "originalName": "shopping.webp",
+    "mimeType": "image/webp",
+    "size": 8484,
+    "width": 225,
+    "height": 300,
+    "format": "webp",
+    "usedBy": [
+      {
+        "entityType": "subcategory",
+        "entityId": "6aa720c3527a5d5ce576a89d"
+      }
+    ],
+    "createdAt": "2026-09-15T23:41:32.877Z",
+    "updatedAt": "2026-09-15T23:42:46.418Z",
+    "id": "6aa9d7ac90003ddaaa28eb49"
+  },
+  {
+    "provider": "cloudinary",
+    "storageKey": "dailyfix/editor/yv7m2cyzsfk6x3sa2fhm",
+    "url": "https://res.cloudinary.com/douj83s0t/image/upload/v1789838721/dailyfix/editor/yv7m2cyzsfk6x3sa2fhm.png",
+    "originalName": "Screenshot 2026-09-19 220533.png",
+    "mimeType": "image/png",
+    "size": 75858,
+    "width": 1891,
+    "height": 943,
+    "format": "png",
+    "usedBy": [
+      {
+        "entityType": "category",
+        "entityId": "6aaec52c203bdec14e3dbfc0"
+      }
+    ],
+    "createdAt": "2026-09-19T17:25:22.105Z",
+    "updatedAt": "2026-09-19T17:25:27.800Z",
+    "id": "6aaec582203bdec14e3dbfc1"
+  },
+  {
+    "provider": "cloudinary",
+    "storageKey": "dailyfix/editor/yqktllamac7kohicawnj",
+    "url": "https://res.cloudinary.com/douj83s0t/image/upload/v1789839127/dailyfix/editor/yqktllamac7kohicawnj.png",
+    "originalName": "Screenshot 2026-09-19 220533.png",
+    "mimeType": "image/png",
+    "size": 75858,
+    "width": 1891,
+    "height": 943,
+    "format": "png",
+    "usedBy": [
+      {
+        "entityType": "subcategory",
+        "entityId": "6aaec70463a38a7c04247257"
+      }
+    ],
+    "createdAt": "2026-09-19T17:32:08.668Z",
+    "updatedAt": "2026-09-19T17:32:11.778Z",
+    "id": "6aaec71863a38a7c04247258"
+  },
+  {
+    "provider": "cloudinary",
+    "storageKey": "dailyfix/editor/szd30vb8wufftkrlaunr",
+    "url": "https://res.cloudinary.com/douj83s0t/image/upload/v1789839183/dailyfix/editor/szd30vb8wufftkrlaunr.png",
+    "originalName": "Screenshot 2026-09-19 220533.png",
+    "mimeType": "image/png",
+    "size": 75858,
+    "width": 1891,
+    "height": 943,
+    "format": "png",
+    "usedBy": [
+      {
+        "entityType": "article",
+        "entityId": "6aaec73f63a38a7c04247259"
+      }
+    ],
+    "createdAt": "2026-09-19T17:33:04.406Z",
+    "updatedAt": "2026-09-19T17:33:07.149Z",
+    "id": "6aaec75063a38a7c0424725a"
+  }
+]

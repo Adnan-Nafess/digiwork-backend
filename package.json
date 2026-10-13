@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "nodemon src/server.js",
     "build": "prisma generate",
-    "start": "prisma migrate deploy && node scripts/bootstrap-admin.js && node src/server.js",
+    "start": "prisma migrate deploy && node scripts/bootstrap-admin.js && node scripts/import-mongodb-content.js && node src/server.js",
     "postinstall": "prisma generate"
   },
   "keywords": [],
