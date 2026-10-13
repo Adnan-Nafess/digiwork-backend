@@ -1,4 +1,8 @@
-require("dotenv").config();
+const { existsSync } = require("node:fs");
+
+if (existsSync(".env")) {
+  process.loadEnvFile(".env");
+}
 
 const app = require("./app");
 const prisma = require("./config/prisma");

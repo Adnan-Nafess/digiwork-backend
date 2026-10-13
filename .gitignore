@@ -18,3 +18,9 @@ Thumbs.db
 # Temporary authentication files
 cookies.txt
 login-response.json
+# Local-only database exports
+/godaddy-data.sql
+/hosted-backup.sql
+/combined-import.sql
+/combined-import-safe.sql
+/export-godaddy-data.cjs
